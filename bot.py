@@ -1,82 +1,71 @@
-
-import telebot
 import os
-import time
-import re
+import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DEX = "https://api.dexscreener.com"
 
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN missing")
-    exit(1)
+REF_LINK = "https://t.me/based_eth_bot?start=r_Elite_xyz_b_"
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# -------- TOOL LOGIC -------- #
-
-def decode_swap(text: str):
-    """
-    Very simple offline intent decoder
-    Example input:
-    Swapped 1.2 ETH for 2500 ABC
-    """
-
-    pattern = r"swapped\s+([\d\.]+)\s+(\w+)\s+for\s+([\d\.]+)\s+(\w+)"
-    match = re.search(pattern, text.lower())
-
-    if not match:
-        return None
-
-    amount_in, token_in, amount_out, token_out = match.groups()
-
-    return {
-        "amount_in": amount_in,
-        "token_in": token_in.upper(),
-        "amount_out": amount_out,
-        "token_out": token_out.upper()
-    }
-
-# -------- BOT COMMANDS -------- #
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(
-        message,
-        "🛠 Swap Intent Decoder (Demo)\n\n"
-        "Send a message like:\n"
-        "`Swapped 1.2 ETH for 2500 ABC`",
-        parse_mode="Markdown"
+# /start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Elite Degen 🦅 is online!\n\nSend a Base token CA to scan."
     )
 
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    decoded = decode_swap(message.text)
+# Scan token
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
 
-    if not decoded:
-        bot.reply_to(
-            message,
-            "❌ Could not decode message\n"
-            "Try:\n"
-            "`Swapped 1.2 ETH for 2500 ABC`",
-            parse_mode="Markdown"
-        )
+    # Simple CA check
+    if not (text.startswith("0x") and len(text) == 42):
         return
 
-    reply = (
-        "🔴 *Swap Detected*\n\n"
-        f"• Sent: `{decoded['amount_in']} {decoded['token_in']}`\n"
-        f"• Received: `{decoded['amount_out']} {decoded['token_out']}`\n\n"
-        "⚠️ Demo decoder (no blockchain API)"
-    )
+    token = text.lower()
 
-    bot.reply_to(message, reply, parse_mode="Markdown")
-
-print("🤖 Swap Intent Decoder Bot started")
-
-# Keep alive (Bothost-safe)
-while True:
     try:
-        bot.polling(none_stop=True, interval=0)
-    except Exception as e:
-        print("Error:", e)
-        time.sleep(5)
+        url = f"{DEX}/tokens/v1/base/{token}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+
+        if not data:
+            await update.message.reply_text("❌ Token not found on DexScreener")
+            return
+
+        pair = data[0]
+
+        name = pair.get("baseToken", {}).get("name", "Unknown")
+        price = pair.get("priceUsd", "N/A")
+        liq = pair.get("liquidity", {}).get("usd", "N/A")
+        paid = "🟢 Dex Paid" if pair.get("paid") else "🔴 Dex Not Paid"
+
+        msg = (
+            f"🦅 *Elite Degen Scan*\n\n"
+            f"*Token:* {name}\n"
+            f"*CA:* `{token}`\n"
+            f"*Price:* ${price}\n"
+            f"*Liquidity:* ${liq}\n"
+            f"*Status:* {paid}"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("Buy with BaseBot", url=f"{REF_LINK}{token}")]
+        ]
+
+        await update.message.reply_text(
+            msg,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    except Exception:
+        await update.message.reply_text("⚠️ DexScreener error, try again later.")
+
+# App
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, scan))
+
+print("Elite Degen Bot running...")
+app.run_polling()
